@@ -19,7 +19,6 @@ const GENOME_OFFSET: u32 = 10u;
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var<storage, read> plants: array<f32>;
 @group(0) @binding(2) var<storage, read> terrain: array<f32>;
-@group(0) @binding(3) var<storage, read> season: array<f32>; // season uniforms as buffer
 
 @vertex
 fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> VertexOutput {
@@ -28,18 +27,24 @@ fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -
 
   let alive = bitcast<u32>(plants[iid * PLANT_STRIDE]);
   if (alive == 0u) {
-    out.position = vec4f(0.0, 0.0, -2.0, 1.0); // behind camera
+    out.position = vec4f(0.0, 0.0, -2.0, 1.0);
     out.local_uv = vec2f(0.0);
     out.color = vec3f(0.0);
     return out;
   }
 
   let col = bitcast<u32>(plants[iid * PLANT_STRIDE + 1u]);
-  let height = plants[iid * PLANT_STRIDE + 5u];
+  if (col >= u32(uniforms.world_width)) {
+    out.position = vec4f(0.0, 0.0, -2.0, 1.0);
+    out.local_uv = vec2f(0.0);
+    out.color = vec3f(0.0);
+    return out;
+  }
+
+  let plant_height = plants[iid * PLANT_STRIDE + 5u];
   let canopy_width = plants[iid * PLANT_STRIDE + 6u];
   let water_stress = plants[iid * PLANT_STRIDE + 7u];
 
-  // Genome traits for color
   let leaf_density = plants[iid * PLANT_STRIDE + GENOME_OFFSET + 3u];
   let drought_tol = plants[iid * PLANT_STRIDE + GENOME_OFFSET + 8u];
   let growth_rate = plants[iid * PLANT_STRIDE + GENOME_OFFSET + 0u];
@@ -48,8 +53,7 @@ fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -
   let base_x = f32(col) / uniforms.world_width;
   let base_y = terrain_height;
 
-  // Billboard quad for plant: trunk + canopy
-  let cw = canopy_width / uniforms.world_width * 3.0;
+  let cw = max(canopy_width / uniforms.world_width * 3.0, 0.002);
   let quad_vert = vid % 6u;
 
   var lx: f32;
@@ -57,14 +61,13 @@ fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -
   switch (quad_vert) {
     case 0u: { lx = -cw; ly = 0.0; }
     case 1u: { lx = cw;  ly = 0.0; }
-    case 2u: { lx = -cw; ly = height * 0.15; }
-    case 3u: { lx = cw;  ly = height * 0.15; }
-    case 4u: { lx = -cw; ly = height * 0.15; }
+    case 2u: { lx = -cw; ly = plant_height * 0.15; }
+    case 3u: { lx = cw;  ly = plant_height * 0.15; }
+    case 4u: { lx = -cw; ly = plant_height * 0.15; }
     case 5u, default: { lx = cw;  ly = 0.0; }
   }
 
-  // Add slight wind sway
-  let sway = sin(uniforms.time * 2.0 + f32(col) * 0.5) * 0.002 * height;
+  let sway = sin(uniforms.time * 2.0 + f32(col) * 0.5) * 0.002 * plant_height;
 
   let world_x = base_x + lx + sway;
   let world_y = base_y + ly;
@@ -74,18 +77,18 @@ fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -
     (world_y - uniforms.view_offset.y) * uniforms.view_scale.y * 2.0 - 1.0,
     0.0, 1.0
   );
-  out.local_uv = vec2f((lx / cw + 1.0) * 0.5, ly / (height * 0.15));
 
-  // Plant color from traits
+  let safe_height = max(plant_height * 0.15, 0.001);
+  out.local_uv = vec2f((lx / cw + 1.0) * 0.5, ly / safe_height);
+
   let green = vec3f(0.2, 0.6, 0.15);
   let drought_yellow = vec3f(0.5, 0.5, 0.1);
   let lush = vec3f(0.1, 0.7, 0.2);
-  var base_color = mix(green, lush, leaf_density);
-  base_color = mix(base_color, drought_yellow, water_stress * 0.8);
-  // Slight hue variation from genome
+  var base_color = mix(green, lush, clamp(leaf_density, 0.0, 1.0));
+  base_color = mix(base_color, drought_yellow, clamp(water_stress * 0.8, 0.0, 1.0));
   base_color.r += (growth_rate - 1.0) * 0.05;
   base_color.b += (drought_tol - 0.5) * 0.1;
-  out.color = base_color;
+  out.color = clamp(base_color, vec3f(0.0), vec3f(1.0));
 
   return out;
 }
@@ -97,11 +100,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 
   let uv = in.local_uv;
 
-  // Trunk (narrow center strip at bottom)
   let trunk_width = 0.08;
   let is_trunk = step(abs(uv.x - 0.5), trunk_width) * step(uv.y, 0.0);
 
-  // Canopy (elliptical shape)
   let cx = (uv.x - 0.5) * 2.0;
   let cy = (uv.y - 0.6) * 2.5;
   let canopy_dist = cx * cx + cy * cy;
@@ -110,12 +111,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 
   var color: vec3f;
   if (is_trunk > 0.5) {
-    color = vec3f(0.3, 0.2, 0.1); // brown trunk
+    color = vec3f(0.3, 0.2, 0.1);
   } else {
     color = in.color;
-    // Darker at edges for depth
     color *= (1.0 - canopy_dist * 0.3);
-    // Subsurface scattering / translucency feel
     color += vec3f(0.05, 0.1, 0.02) * (1.0 - canopy_dist);
   }
 

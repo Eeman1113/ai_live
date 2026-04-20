@@ -144,7 +144,6 @@ export class Renderer {
         { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
         { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
         { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
-        { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
       ],
     });
 
@@ -297,7 +296,6 @@ export class Renderer {
           { binding: 0, resource: { buffer: this.renderUniformBuffer } },
           { binding: 1, resource: { buffer: this.sim.plantBuffer } },
           { binding: 2, resource: { buffer: this.sim.terrainBuffer } },
-          { binding: 3, resource: { buffer: this.sim.seasonUniformBuffer } },
         ],
       }));
       pass.draw(6, MAX_PLANTS);
